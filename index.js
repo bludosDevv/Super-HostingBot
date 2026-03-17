@@ -7,6 +7,14 @@ const config = require('./settings.json');
 const express = require('express');
 const http = require('http');
 const https = require('https');
+const { Server: SocketIOServer } = require('socket.io');
+
+let mineflayerViewer = null;
+try {
+  ({ mineflayer: mineflayerViewer } = require('prismarine-viewer'));
+} catch (e) {
+  console.log('[Viewer] prismarine-viewer is not installed. Live first-person view is disabled.');
+}
 
 // ============================================================
 // EXPRESS SERVER - Keep Render/Aternos alive
@@ -24,235 +32,183 @@ let botState = {
   wasThrottled: false
 };
 
+const viewerState = {
+  enabled: Boolean(mineflayerViewer),
+  port: Number(process.env.VIEWER_PORT || 3001),
+  running: false
+};
+
+const remoteControlState = {
+  forward: false,
+  back: false,
+  left: false,
+  right: false,
+  jump: false,
+  sprint: false,
+  sneak: false,
+  yaw: 0,
+  pitch: 0,
+  lastInputAt: 0
+};
+
 // Health check endpoint for monitoring
 app.get('/', (req, res) => {
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-      <head>
-        <title>${config.name} Dashboard</title>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-          
-          :root {
-            --bg: #0f172a;
-            --container-bg: #111827;
-            --card-bg: #1f2937;
-            --accent: #2dd4bf;
-            --text-main: #f8fafc;
-            --text-dim: #94a3b8;
-          }
-
-          body {
-            font-family: 'Inter', sans-serif;
-            background: var(--bg);
-            color: var(--text-main);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-          }
-
-          .container {
-            background: var(--container-bg);
-            padding: 3rem 2rem;
-            border-radius: 2rem;
-            width: 420px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-            border: 1px solid #1f2937;
-            text-align: center;
-          }
-
-          h1 {
-            font-size: 1.875rem;
-            font-weight: 700;
-            margin-bottom: 2.5rem;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 0.75rem;
-            color: #f1f5f9;
-          }
-
-          .card {
-            background: var(--card-bg);
-            border-radius: 1rem;
-            padding: 1.25rem 1.75rem;
-            margin-bottom: 1rem;
-            text-align: left;
-            border-left: 4px solid var(--accent);
-            position: relative;
-            overflow: hidden;
-            transition: transform 0.2s;
-          }
-          
-          .card:hover { transform: translateX(5px); }
-
-          .label {
-            font-size: 0.75rem;
-            font-weight: 600;
-            color: var(--text-dim);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-bottom: 0.5rem;
-          }
-
-          .value {
-            font-size: 1.25rem;
-            font-weight: 700;
-            color: var(--accent);
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            text-shadow: 0 0 15px rgba(45, 212, 191, 0.3);
-          }
-
-          .dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            background: #4ade80;
-            box-shadow: 0 0 10px #4ade80;
-            display: inline-block;
-          }
-
-          .dot.offline {
-            background: #f87171;
-            box-shadow: 0 0 10px #f87171;
-          }
-
-          .pulse {
-            animation: pulse-animation 2s infinite;
-          }
-
-          @keyframes pulse-animation {
-            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7); }
-            70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(74, 222, 128, 0); }
-            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); }
-          }
-          
-          .offline.pulse {
-            animation: pulse-offline 2s infinite;
-          }
-          
-          @keyframes pulse-offline {
-            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.7); }
-            70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(248, 113, 113, 0); }
-            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(248, 113, 113, 0); }
-          }
-
-          .btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 0.75rem;
-            background: var(--accent);
-            color: #0f172a;
-            padding: 1rem 2rem;
-            border-radius: 1rem;
-            font-weight: 700;
-            text-decoration: none;
-            margin-top: 1.5rem;
-            transition: all 0.2s;
-            box-shadow: 0 0 20px rgba(45, 212, 191, 0.4);
-            width: 100%;
-            box-sizing: border-box;
-          }
-
-          .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 0 30px rgba(45, 212, 191, 0.6);
-            filter: brightness(1.1);
-          }
-
-          .footer {
-            margin-top: 1.5rem;
-            font-size: 0.8125rem;
-            color: #4b5563;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <h1>🤖 ${config.name}</h1>
-          
-          <div class="card">
-            <div class="label">Status</div>
-            <div class="value">
-              <span id="status-dot" class="dot pulse"></span>
-              <span id="status-text">Connecting...</span>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="label">Uptime</div>
-            <div class="value" id="uptime-text">0h 0m 0s</div>
-          </div>
-
-          <div class="card">
-            <div class="label">Coordinates</div>
-            <div class="value">
-              📍 <span id="coords-text">Searching...</span>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="label">Server</div>
-            <div class="value" style="font-size: 1.1rem; color: #5eead4;">${config.server.ip}</div>
-          </div>
-
-          <a href="/tutorial" class="btn">📘 View Setup Guide</a>
-          
-          <div class="footer">Auto-refreshing every 5s</div>
+  res.send(`<!DOCTYPE html>
+  <html lang="en">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>${config.name} Remote Dashboard</title>
+      <style>
+        :root { color-scheme: dark; --bg:#070b14; --card:#111827; --muted:#94a3b8; --accent:#2dd4bf; }
+        * { box-sizing: border-box; }
+        body { margin:0; font-family: Inter, Segoe UI, sans-serif; background: radial-gradient(circle at top, #0f172a, var(--bg)); color:#f8fafc; }
+        .wrap { max-width: 1150px; margin: 0 auto; padding: 16px; }
+        .top { display:grid; gap:10px; grid-template-columns: repeat(auto-fit,minmax(170px,1fr)); margin-bottom:14px; }
+        .card { background: rgba(17,24,39,.95); border:1px solid #1f2937; border-radius:14px; padding:12px 14px; }
+        .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+        .value { color:var(--accent); font-weight:700; font-size:18px; margin-top:6px; }
+        .viewer-box { border-radius: 14px; border:1px solid #1f2937; min-height: 220px; padding: 14px; background: linear-gradient(180deg,#020617,#020817); }
+        .view-title { font-size: 18px; margin: 0 0 6px; }
+        .view-line { color:#cbd5e1; margin: 4px 0; }
+        .controls { margin-top: 12px; display:flex; gap:10px; flex-wrap:wrap; }
+        button { background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:10px; padding:10px 12px; cursor:pointer; }
+        .mobile-controls { margin-top: 16px; display:none; justify-content:space-between; align-items:flex-end; gap:16px; }
+        .stick { width:130px; height:130px; border-radius:50%; background:#0f172a; border:1px solid #334155; position:relative; touch-action:none; }
+        .knob { width:52px; height:52px; border-radius:50%; background:var(--accent); position:absolute; left:39px; top:39px; opacity:.9; }
+        .hint { margin-top:8px; color:var(--muted); font-size:13px; }
+        @media (max-width: 900px) { .mobile-controls { display:flex; } .hint-desktop { display:none; } }
+      </style>
+    </head>
+    <body>
+      <div class="wrap">
+        <h2>🎮 ${config.name} - Live Control</h2>
+        <div class="top">
+          <div class="card"><div class="label">Status</div><div id="status" class="value">Connecting...</div></div>
+          <div class="card"><div class="label">Uptime</div><div id="uptime" class="value">0h 0m 0s</div></div>
+          <div class="card"><div class="label">Coords</div><div id="coords" class="value">-</div></div>
+          <div class="card"><div class="label">Server</div><div class="value">${config.server.ip}:${config.server.port}</div></div>
         </div>
 
-        <script>
-          const statusText = document.getElementById('status-text');
-          const statusDot = document.getElementById('status-dot');
-          const uptimeText = document.getElementById('uptime-text');
-          const coordsText = document.getElementById('coords-text');
+        <div class="viewer-box">
+          <h3 class="view-title">👀 Bot Vision</h3>
+          <div id="vision-line" class="view-line">Waiting for vision data...</div>
+          <div id="viewer-line" class="view-line">Viewer status: checking...</div>
+          <div class="view-line">If your site is HTTPS (Render), browser blocks mixed content from the viewer's HTTP port, so embedded black screen is removed.</div>
+          <div class="controls">
+            <button id="open-viewer-btn">Open Raw Viewer Tab</button>
+          </div>
+        </div>
 
-          function formatUptime(s) {
-            const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-            return h + 'h ' + m + 'm ' + sec + 's';
-          }
+        <div class="controls">
+          <button id="jump-btn">Jump</button>
+          <button id="sneak-btn">Sneak</button>
+          <button id="sprint-btn">Sprint</button>
+          <a href="/tutorial"><button type="button">Setup Guide</button></a>
+        </div>
 
-          async function update() {
-            try {
-              const r = await fetch('/health');
-              const data = await r.json();
-              
-              if (data.status === 'connected') {
-                statusText.innerText = 'Online & Running';
-                statusDot.className = 'dot pulse';
-              } else {
-                statusText.innerText = 'Reconnecting...';
-                statusDot.className = 'dot offline pulse';
-              }
+        <div class="hint hint-desktop">PC: Click page then use WASD + Space + Shift. Move mouse to look around.</div>
+        <div class="hint">Mobile: use left joystick to move and right joystick to look around.</div>
 
-              uptimeText.innerText = formatUptime(data.uptime);
-              
-              if (data.coords) {
-                coordsText.innerText = Math.floor(data.coords.x) + ', ' + Math.floor(data.coords.y) + ', ' + Math.floor(data.coords.z);
-              } else {
-                coordsText.innerText = 'Searching Position...';
-              }
-            } catch (e) {
-              statusText.innerText = 'System Offline';
-              statusDot.className = 'dot offline';
-            }
-          }
+        <div class="mobile-controls">
+          <div><div class="stick" id="move-stick"><div class="knob" id="move-knob"></div></div><div class="hint">Move</div></div>
+          <div><div class="stick" id="look-stick"><div class="knob" id="look-knob"></div></div><div class="hint">Look</div></div>
+        </div>
+      </div>
 
-          setInterval(update, 5000);
-          update();
-        </script>
-      </body>
-    </html>
-  `);
+      <script src="/socket.io/socket.io.js"></script>
+      <script>
+        const socket = io();
+        const pressed = new Set();
+        const statusEl = document.getElementById('status');
+        const uptimeEl = document.getElementById('uptime');
+        const coordsEl = document.getElementById('coords');
+        const visionEl = document.getElementById('vision-line');
+        const viewerEl = document.getElementById('viewer-line');
+
+        function fmt(sec){ const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60; return h + 'h ' + m + 'm ' + s + 's'; }
+        function sendControls(extra={}) {
+          socket.emit('control:update', {
+            forward: pressed.has('KeyW'), back: pressed.has('KeyS'), left: pressed.has('KeyA'), right: pressed.has('KeyD'),
+            jump: pressed.has('Space'), sprint: pressed.has('ControlLeft') || pressed.has('ControlRight'),
+            sneak: pressed.has('ShiftLeft') || pressed.has('ShiftRight'), ...extra
+          });
+        }
+
+        window.addEventListener('keydown', (e) => { if (!e.repeat) { pressed.add(e.code); sendControls(); } });
+        window.addEventListener('keyup', (e) => { pressed.delete(e.code); sendControls(); });
+        document.getElementById('jump-btn').addEventListener('pointerdown', ()=>{ pressed.add('Space'); sendControls(); });
+        document.getElementById('jump-btn').addEventListener('pointerup', ()=>{ pressed.delete('Space'); sendControls(); });
+        document.getElementById('sneak-btn').addEventListener('pointerdown', ()=>{ pressed.add('ShiftLeft'); sendControls(); });
+        document.getElementById('sneak-btn').addEventListener('pointerup', ()=>{ pressed.delete('ShiftLeft'); sendControls(); });
+        document.getElementById('sprint-btn').addEventListener('pointerdown', ()=>{ pressed.add('ControlLeft'); sendControls(); });
+        document.getElementById('sprint-btn').addEventListener('pointerup', ()=>{ pressed.delete('ControlLeft'); sendControls(); });
+
+        let mouseCaptured = false;
+        document.body.addEventListener('click', async () => {
+          if (document.pointerLockElement !== document.body) await document.body.requestPointerLock();
+        });
+        document.addEventListener('pointerlockchange', () => { mouseCaptured = document.pointerLockElement === document.body; });
+        document.addEventListener('mousemove', (e) => {
+          if (!mouseCaptured) return;
+          socket.emit('control:look', { dx: e.movementX || 0, dy: e.movementY || 0 });
+        });
+
+        document.getElementById('open-viewer-btn').addEventListener('click', async () => {
+          const r = await fetch('/viewer-info');
+          const data = await r.json();
+          if (!data.url) return;
+          window.open(data.url, '_blank');
+        });
+
+        async function refresh() {
+          try {
+            const [health, vision] = await Promise.all([fetch('/health').then(r => r.json()), fetch('/vision').then(r => r.json())]);
+            statusEl.textContent = health.status === 'connected' ? 'Online' : 'Reconnecting';
+            uptimeEl.textContent = fmt(health.uptime);
+            coordsEl.textContent = health.coords ? (Math.floor(health.coords.x) + ', ' + Math.floor(health.coords.y) + ', ' + Math.floor(health.coords.z)) : '-';
+            visionEl.textContent = 'Seeing: ' + vision.summary;
+            viewerEl.textContent = health.viewer.running ? 'Viewer ready. Use "Open Raw Viewer Tab".' : 'Viewer status: waiting for bot spawn.';
+          } catch (_) {}
+        }
+        setInterval(refresh, 2500); refresh();
+
+        function bindStick(stickId, knobId, handler){
+          const stick = document.getElementById(stickId); const knob = document.getElementById(knobId);
+          const center = {x:65,y:65}; const max = 38; let active = false;
+          const setPos=(x,y)=>{ knob.style.left=(center.x+x-26)+'px'; knob.style.top=(center.y+y-26)+'px'; };
+          const onMove=(clientX,clientY)=>{
+            const rect=stick.getBoundingClientRect(); let dx=clientX-(rect.left+center.x); let dy=clientY-(rect.top+center.y);
+            const dist=Math.hypot(dx,dy); if(dist>max){ dx=(dx/dist)*max; dy=(dy/dist)*max; }
+            setPos(dx,dy); handler(dx/max,dy/max);
+          };
+          const reset=()=>{ setPos(0,0); handler(0,0); active=false; };
+          stick.addEventListener('pointerdown',(e)=>{ active=true; stick.setPointerCapture(e.pointerId); onMove(e.clientX,e.clientY); });
+          stick.addEventListener('pointermove',(e)=>{ if(active) onMove(e.clientX,e.clientY); });
+          stick.addEventListener('pointerup',reset); stick.addEventListener('pointercancel',reset);
+          setPos(0,0);
+        }
+
+        bindStick('move-stick','move-knob',(x,y)=>{ socket.emit('control:update',{ forward:y < -0.25, back:y > 0.25, left:x < -0.25, right:x > 0.25 }); });
+        bindStick('look-stick','look-knob',(x,y)=>{ socket.emit('control:look',{ dx:x*8, dy:y*8 }); });
+      </script>
+    </body>
+  </html>`);
 });
+
+app.get('/viewer', (req, res) => {
+  res.redirect('/viewer-info');
+});
+
+app.get('/viewer-info', (req, res) => {
+  const url = `http://${req.hostname}:${viewerState.port}/`;
+  res.json({
+    enabled: viewerState.enabled,
+    running: viewerState.running,
+    url
+  });
+});
+
 app.get('/tutorial', (req, res) => {
   res.send(`
   < html >
@@ -311,8 +267,64 @@ app.get('/health', (req, res) => {
     coords: (bot && bot.entity) ? bot.entity.position : null,
     lastActivity: botState.lastActivity,
     reconnectAttempts: botState.reconnectAttempts,
-    memoryUsage: process.memoryUsage().heapUsed / 1024 / 1024
+    memoryUsage: process.memoryUsage().heapUsed / 1024 / 1024,
+    viewer: {
+      enabled: viewerState.enabled,
+      running: viewerState.running,
+      port: viewerState.port
+    },
+    remoteControl: {
+      active: remoteControlActive(),
+      users: io ? io.engine.clientsCount : 0
+    }
   });
+});
+
+
+app.get('/vision', (req, res) => {
+  if (!bot || !botState.connected || !bot.entity || typeof bot.blockAtCursor !== 'function') {
+    return res.json({ summary: 'Bot is offline or still connecting.' });
+  }
+
+  let targetBlock = null;
+  let targetEntity = null;
+  try {
+    targetBlock = bot.blockAtCursor(128);
+  } catch (e) {}
+
+  try {
+    const eye = bot.entity.position.offset(0, bot.entity.height || 1.62, 0);
+    const yaw = bot.entity.yaw || 0;
+    const pitch = bot.entity.pitch || 0;
+    const lookVec = {
+      x: -Math.sin(yaw) * Math.cos(pitch),
+      y: Math.sin(-pitch),
+      z: -Math.cos(yaw) * Math.cos(pitch)
+    };
+
+    let bestScore = 0.92;
+    Object.values(bot.entities || {}).forEach((ent) => {
+      if (!ent || ent.id === bot.entity.id || !ent.position) return;
+      const dx = ent.position.x - eye.x;
+      const dy = ent.position.y - eye.y;
+      const dz = ent.position.z - eye.z;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (dist > 30 || dist < 0.01) return;
+      const dirx = dx / dist;
+      const diry = dy / dist;
+      const dirz = dz / dist;
+      const score = (dirx * lookVec.x) + (diry * lookVec.y) + (dirz * lookVec.z);
+      if (score > bestScore) {
+        bestScore = score;
+        targetEntity = ent;
+      }
+    });
+  } catch (e) {}
+
+  const blockText = targetBlock ? `${targetBlock.name} @ ${Math.floor(targetBlock.position.x)},${Math.floor(targetBlock.position.y)},${Math.floor(targetBlock.position.z)}` : 'no clear block target';
+  const entityText = targetEntity ? `${targetEntity.name || targetEntity.username || targetEntity.type} (${Math.floor(bot.entity.position.distanceTo(targetEntity.position))}m)` : 'no entity in crosshair';
+
+  return res.json({ summary: `${blockText}; ${entityText}` });
 });
 
 app.get('/ping', (req, res) => res.send('pong'));
@@ -320,6 +332,41 @@ app.get('/ping', (req, res) => res.send('pong'));
 // FIX: handle port conflict gracefully - try next port if taken
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`[Server] HTTP server started on port ${server.address().port} `);
+});
+
+const io = new SocketIOServer(server, {
+  cors: { origin: '*' }
+});
+
+io.on('connection', (socket) => {
+  socket.on('control:update', (payload = {}) => {
+    remoteControlState.forward = Boolean(payload.forward);
+    remoteControlState.back = Boolean(payload.back);
+    remoteControlState.left = Boolean(payload.left);
+    remoteControlState.right = Boolean(payload.right);
+    remoteControlState.jump = Boolean(payload.jump);
+    remoteControlState.sprint = Boolean(payload.sprint);
+    remoteControlState.sneak = Boolean(payload.sneak);
+    remoteControlState.lastInputAt = Date.now();
+    applyRemoteControls();
+  });
+
+  socket.on('control:look', (payload = {}) => {
+    const dx = Number(payload.dx) || 0;
+    const dy = Number(payload.dy) || 0;
+    remoteControlState.yaw += dx * 0.0022;
+    remoteControlState.pitch += dy * 0.0022;
+    const maxPitch = Math.PI / 2 - 0.01;
+    remoteControlState.pitch = Math.max(-maxPitch, Math.min(maxPitch, remoteControlState.pitch));
+    remoteControlState.lastInputAt = Date.now();
+    applyRemoteControls();
+  });
+
+  socket.on('disconnect', () => {
+    if (io.engine.clientsCount === 0) {
+      resetRemoteControls();
+    }
+  });
 });
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
@@ -330,6 +377,58 @@ server.on('error', (err) => {
     console.log(`[Server] HTTP server error: ${err.message} `);
   }
 });
+
+
+function remoteControlActive() {
+  return Date.now() - remoteControlState.lastInputAt < 6000;
+}
+
+function resetRemoteControls() {
+  remoteControlState.forward = false;
+  remoteControlState.back = false;
+  remoteControlState.left = false;
+  remoteControlState.right = false;
+  remoteControlState.jump = false;
+  remoteControlState.sprint = false;
+  remoteControlState.sneak = false;
+  remoteControlState.lastInputAt = 0;
+  applyRemoteControls();
+}
+
+function applyRemoteControls() {
+  if (!bot || !botState.connected || typeof bot.setControlState !== 'function') return;
+  try {
+    bot.setControlState('forward', remoteControlState.forward);
+    bot.setControlState('back', remoteControlState.back);
+    bot.setControlState('left', remoteControlState.left);
+    bot.setControlState('right', remoteControlState.right);
+    bot.setControlState('jump', remoteControlState.jump);
+    bot.setControlState('sprint', remoteControlState.sprint);
+    bot.setControlState('sneak', remoteControlState.sneak);
+
+    if (remoteControlActive()) {
+      bot.look(remoteControlState.yaw, remoteControlState.pitch, true);
+      botState.lastActivity = Date.now();
+    }
+  } catch (e) {
+    console.log('[RemoteControl] Error applying controls:', e.message);
+  }
+}
+
+function startViewerIfEnabled() {
+  if (!mineflayerViewer || viewerState.running || !bot) return;
+  try {
+    mineflayerViewer(bot, {
+      port: viewerState.port,
+      firstPerson: true,
+      viewDistance: 6
+    });
+    viewerState.running = true;
+    console.log(`[Viewer] First-person viewer started on port ${viewerState.port}`);
+  } catch (e) {
+    console.log(`[Viewer] Failed to start viewer: ${e.message}`);
+  }
+}
 
 // FIX: only one definition of formatUptime
 function formatUptime(seconds) {
@@ -507,6 +606,14 @@ function createBot() {
       defaultMove.fallDamageCost = 1000;
 
       initializeModules(bot, mcData, defaultMove);
+      startViewerIfEnabled();
+      remoteControlState.yaw = bot.entity.yaw || 0;
+      remoteControlState.pitch = bot.entity.pitch || 0;
+      addInterval(() => {
+        if (remoteControlActive()) {
+          applyRemoteControls();
+        }
+      }, 90);
 
       // Attempt creative mode (only works if bot has OP and enabled in settings)
       setTimeout(() => {
@@ -535,6 +642,7 @@ function createBot() {
       botState.connected = false;
       botState.errors.push({ type: 'kicked', reason: kickReason, time: Date.now() });
       clearAllIntervals();
+      resetRemoteControls();
 
       const reasonStr = String(kickReason).toLowerCase();
       if (reasonStr.includes('throttl') || reasonStr.includes('wait before reconnect') || reasonStr.includes('too fast')) {
@@ -553,6 +661,7 @@ function createBot() {
       console.log(`[Bot] Disconnected: ${reason || 'Unknown reason'}`);
       botState.connected = false;
       clearAllIntervals();
+      resetRemoteControls();
       spawnHandled = false; // reset for next connection
 
       if (config.discord && config.discord.events && config.discord.events.disconnect) {
