@@ -10,6 +10,8 @@ A Minecraft bot that helps keep an Aternos server online 24/7 by automatically j
 *    **Smart Reconnect**: Automatically reconnects if the internet drops or server restarts.
 *    **Render-Ready**: Includes "Self-Ping" to run 24/7 for FREE on Render.com.
 *    **Plugin Support**: Compatible with Paper/Spigot/Bukkit (auto-auth included).
+*    **Web Remote Control**: Built-in dashboard with keyboard/mouse + mobile joystick controls.
+*    **Live POV Viewer**: See the bot's first-person in-game camera from the web dashboard.
 
 ---
 
