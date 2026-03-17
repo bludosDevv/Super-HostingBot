@@ -68,19 +68,16 @@ app.get('/', (req, res) => {
         .card { background: rgba(17,24,39,.95); border:1px solid #1f2937; border-radius:14px; padding:12px 14px; }
         .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
         .value { color:var(--accent); font-weight:700; font-size:18px; margin-top:6px; }
-        .viewer { border-radius: 14px; overflow: hidden; border:1px solid #1f2937; background:#000; min-height: 320px; }
-        .viewer iframe { width:100%; height:min(65vh,700px); border:0; }
-        .viewer-fallback { padding: 20px; color: #cbd5e1; }
+        .viewer-box { border-radius: 14px; border:1px solid #1f2937; min-height: 220px; padding: 14px; background: linear-gradient(180deg,#020617,#020817); }
+        .view-title { font-size: 18px; margin: 0 0 6px; }
+        .view-line { color:#cbd5e1; margin: 4px 0; }
         .controls { margin-top: 12px; display:flex; gap:10px; flex-wrap:wrap; }
         button { background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:10px; padding:10px 12px; cursor:pointer; }
         .mobile-controls { margin-top: 16px; display:none; justify-content:space-between; align-items:flex-end; gap:16px; }
         .stick { width:130px; height:130px; border-radius:50%; background:#0f172a; border:1px solid #334155; position:relative; touch-action:none; }
         .knob { width:52px; height:52px; border-radius:50%; background:var(--accent); position:absolute; left:39px; top:39px; opacity:.9; }
         .hint { margin-top:8px; color:var(--muted); font-size:13px; }
-        @media (max-width: 900px) {
-          .mobile-controls { display:flex; }
-          .hint-desktop { display:none; }
-        }
+        @media (max-width: 900px) { .mobile-controls { display:flex; } .hint-desktop { display:none; } }
       </style>
     </head>
     <body>
@@ -93,29 +90,29 @@ app.get('/', (req, res) => {
           <div class="card"><div class="label">Server</div><div class="value">${config.server.ip}:${config.server.port}</div></div>
         </div>
 
-        <div class="viewer" id="viewer">
-          <iframe id="viewer-frame" src="/viewer" allowfullscreen></iframe>
+        <div class="viewer-box">
+          <h3 class="view-title">👀 Bot Vision</h3>
+          <div id="vision-line" class="view-line">Waiting for vision data...</div>
+          <div id="viewer-line" class="view-line">Viewer status: checking...</div>
+          <div class="view-line">If your site is HTTPS (Render), browser blocks mixed content from the viewer's HTTP port, so embedded black screen is removed.</div>
+          <div class="controls">
+            <button id="open-viewer-btn">Open Raw Viewer Tab</button>
+          </div>
         </div>
 
         <div class="controls">
           <button id="jump-btn">Jump</button>
           <button id="sneak-btn">Sneak</button>
           <button id="sprint-btn">Sprint</button>
-          <a href="/tutorial"><button>Setup Guide</button></a>
+          <a href="/tutorial"><button type="button">Setup Guide</button></a>
         </div>
 
-        <div class="hint hint-desktop">PC: Click the page then use WASD + Space + Shift. Move mouse to look around.</div>
+        <div class="hint hint-desktop">PC: Click page then use WASD + Space + Shift. Move mouse to look around.</div>
         <div class="hint">Mobile: use left joystick to move and right joystick to look around.</div>
 
         <div class="mobile-controls">
-          <div>
-            <div class="stick" id="move-stick"><div class="knob" id="move-knob"></div></div>
-            <div class="hint">Move</div>
-          </div>
-          <div>
-            <div class="stick" id="look-stick"><div class="knob" id="look-knob"></div></div>
-            <div class="hint">Look</div>
-          </div>
+          <div><div class="stick" id="move-stick"><div class="knob" id="move-knob"></div></div><div class="hint">Move</div></div>
+          <div><div class="stick" id="look-stick"><div class="knob" id="look-knob"></div></div><div class="hint">Look</div></div>
         </div>
       </div>
 
@@ -126,6 +123,8 @@ app.get('/', (req, res) => {
         const statusEl = document.getElementById('status');
         const uptimeEl = document.getElementById('uptime');
         const coordsEl = document.getElementById('coords');
+        const visionEl = document.getElementById('vision-line');
+        const viewerEl = document.getElementById('viewer-line');
 
         function fmt(sec){ const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60; return h + 'h ' + m + 'm ' + s + 's'; }
         function sendControls(extra={}) {
@@ -147,9 +146,7 @@ app.get('/', (req, res) => {
 
         let mouseCaptured = false;
         document.body.addEventListener('click', async () => {
-          if (document.pointerLockElement !== document.body) {
-            await document.body.requestPointerLock();
-          }
+          if (document.pointerLockElement !== document.body) await document.body.requestPointerLock();
         });
         document.addEventListener('pointerlockchange', () => { mouseCaptured = document.pointerLockElement === document.body; });
         document.addEventListener('mousemove', (e) => {
@@ -157,15 +154,21 @@ app.get('/', (req, res) => {
           socket.emit('control:look', { dx: e.movementX || 0, dy: e.movementY || 0 });
         });
 
+        document.getElementById('open-viewer-btn').addEventListener('click', async () => {
+          const r = await fetch('/viewer-info');
+          const data = await r.json();
+          if (!data.url) return;
+          window.open(data.url, '_blank');
+        });
+
         async function refresh() {
           try {
-            const r = await fetch('/health');
-            const d = await r.json();
-            statusEl.textContent = d.status === 'connected' ? 'Online' : 'Reconnecting';
-            uptimeEl.textContent = fmt(d.uptime);
-            coordsEl.textContent = d.coords ? (Math.floor(d.coords.x) + ', ' + Math.floor(d.coords.y) + ', ' + Math.floor(d.coords.z)) : '-';
-            const frame = document.getElementById('viewer-frame');
-            if (d.viewer && d.viewer.running && frame.getAttribute('src') !== '/viewer') frame.setAttribute('src', '/viewer');
+            const [health, vision] = await Promise.all([fetch('/health').then(r => r.json()), fetch('/vision').then(r => r.json())]);
+            statusEl.textContent = health.status === 'connected' ? 'Online' : 'Reconnecting';
+            uptimeEl.textContent = fmt(health.uptime);
+            coordsEl.textContent = health.coords ? (Math.floor(health.coords.x) + ', ' + Math.floor(health.coords.y) + ', ' + Math.floor(health.coords.z)) : '-';
+            visionEl.textContent = 'Seeing: ' + vision.summary;
+            viewerEl.textContent = health.viewer.running ? 'Viewer ready. Use "Open Raw Viewer Tab".' : 'Viewer status: waiting for bot spawn.';
           } catch (_) {}
         }
         setInterval(refresh, 2500); refresh();
@@ -186,9 +189,7 @@ app.get('/', (req, res) => {
           setPos(0,0);
         }
 
-        bindStick('move-stick','move-knob',(x,y)=>{
-          socket.emit('control:update',{ forward:y < -0.25, back:y > 0.25, left:x < -0.25, right:x > 0.25 });
-        });
+        bindStick('move-stick','move-knob',(x,y)=>{ socket.emit('control:update',{ forward:y < -0.25, back:y > 0.25, left:x < -0.25, right:x > 0.25 }); });
         bindStick('look-stick','look-knob',(x,y)=>{ socket.emit('control:look',{ dx:x*8, dy:y*8 }); });
       </script>
     </body>
@@ -196,13 +197,16 @@ app.get('/', (req, res) => {
 });
 
 app.get('/viewer', (req, res) => {
-  if (!viewerState.enabled) {
-    return res.status(200).send('<h3 style="font-family:sans-serif">Viewer dependency missing. Run npm install and restart.</h3>');
-  }
-  if (!viewerState.running) {
-    return res.status(200).send('<h3 style="font-family:sans-serif">Viewer will start after the bot joins the server.</h3>');
-  }
-  return res.redirect(`http://${req.hostname}:${viewerState.port}/`);
+  res.redirect('/viewer-info');
+});
+
+app.get('/viewer-info', (req, res) => {
+  const url = `http://${req.hostname}:${viewerState.port}/`;
+  res.json({
+    enabled: viewerState.enabled,
+    running: viewerState.running,
+    url
+  });
 });
 
 app.get('/tutorial', (req, res) => {
@@ -274,6 +278,53 @@ app.get('/health', (req, res) => {
       users: io ? io.engine.clientsCount : 0
     }
   });
+});
+
+
+app.get('/vision', (req, res) => {
+  if (!bot || !botState.connected || !bot.entity || typeof bot.blockAtCursor !== 'function') {
+    return res.json({ summary: 'Bot is offline or still connecting.' });
+  }
+
+  let targetBlock = null;
+  let targetEntity = null;
+  try {
+    targetBlock = bot.blockAtCursor(128);
+  } catch (e) {}
+
+  try {
+    const eye = bot.entity.position.offset(0, bot.entity.height || 1.62, 0);
+    const yaw = bot.entity.yaw || 0;
+    const pitch = bot.entity.pitch || 0;
+    const lookVec = {
+      x: -Math.sin(yaw) * Math.cos(pitch),
+      y: Math.sin(-pitch),
+      z: -Math.cos(yaw) * Math.cos(pitch)
+    };
+
+    let bestScore = 0.92;
+    Object.values(bot.entities || {}).forEach((ent) => {
+      if (!ent || ent.id === bot.entity.id || !ent.position) return;
+      const dx = ent.position.x - eye.x;
+      const dy = ent.position.y - eye.y;
+      const dz = ent.position.z - eye.z;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (dist > 30 || dist < 0.01) return;
+      const dirx = dx / dist;
+      const diry = dy / dist;
+      const dirz = dz / dist;
+      const score = (dirx * lookVec.x) + (diry * lookVec.y) + (dirz * lookVec.z);
+      if (score > bestScore) {
+        bestScore = score;
+        targetEntity = ent;
+      }
+    });
+  } catch (e) {}
+
+  const blockText = targetBlock ? `${targetBlock.name} @ ${Math.floor(targetBlock.position.x)},${Math.floor(targetBlock.position.y)},${Math.floor(targetBlock.position.z)}` : 'no clear block target';
+  const entityText = targetEntity ? `${targetEntity.name || targetEntity.username || targetEntity.type} (${Math.floor(bot.entity.position.distanceTo(targetEntity.position))}m)` : 'no entity in crosshair';
+
+  return res.json({ summary: `${blockText}; ${entityText}` });
 });
 
 app.get('/ping', (req, res) => res.send('pong'));
